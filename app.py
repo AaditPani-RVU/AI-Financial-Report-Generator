@@ -6,14 +6,12 @@ from transformers import pipeline
 # Set up Streamlit
 st.set_page_config(page_title="Finance Chatbot", layout="wide")
 
-
 HF_TOKEN = st.secrets["huggingface"]["token"]
-MODEL_NAME = "tiiuae/falcon-7b-instruct"
+MODEL_NAME = "FinGPT/fingpt-mt_llama2-7b_lora"  # more finance-focused model
 
 @st.cache_resource
 def load_model():
     return pipeline("text-generation", model=MODEL_NAME, token=HF_TOKEN)
-
 
 text_gen = load_model()
 
@@ -29,46 +27,46 @@ def chat_with_transactions(prompt, df):
             if month in prompt:
                 return get_monthly_spending(df, month)
         total_expense = df['Amount'].sum()
-        return f"You have spent a total of ₹{total_expense:,.2f}."
+        return f"Total spending is ₹{total_expense:,.2f}. Consider reviewing your top expense areas."
 
     if any(x in prompt for x in ["spending on", "spend on", "did i spend on"]):
         for category in df['Category'].dropna().unique():
             if category.lower() in prompt:
                 spending = df[df['Category'].str.lower() == category.lower()]['Amount'].sum()
-                return f"You have spent ₹{spending:,.2f} on {category.capitalize()}."
-        return "I couldn't find that category in your transactions. Try 'groceries', 'entertainment', etc."
+                return f"₹{spending:,.2f} spent on {category.capitalize()}. Monitor this if it exceeds your budget."
+        return "Couldn't find that category. Try asking about 'groceries', 'bills', etc."
 
     elif any(x in prompt for x in ["top categories", "most spent"]):
         top_categories = df.groupby("Category")["Amount"].sum().sort_values(ascending=False).head(5)
         top_str = "\n".join([f"{i+1}. {cat}: ₹{amt:,.2f}" for i, (cat, amt) in enumerate(top_categories.items())])
-        return f"Your top 5 spending categories:\n{top_str}"
+        return f"Top 5 spending categories:\n{top_str}\nConsider optimizing high-spend categories."
 
     return None
 
 def get_monthly_spending(df, month_name):
     month_df = df[df['Month'].str.lower() == month_name.lower()]
     total = month_df['Amount'].sum()
-    return f"You spent ₹{total:,.2f} in {month_name.capitalize()}."
+    return f"In {month_name.capitalize()}, you spent ₹{total:,.2f}. Consider setting monthly spending goals."
 
 def compare_months(df, month1, month2):
     total1 = df[df['Month'].str.lower() == month1.lower()]['Amount'].sum()
     total2 = df[df['Month'].str.lower() == month2.lower()]['Amount'].sum()
     diff = total1 - total2
     if diff > 0:
-        return f"You spent ₹{diff:,.2f} more in {month1.capitalize()} compared to {month2.capitalize()}."
+        return f"₹{diff:,.2f} more spent in {month1.capitalize()} compared to {month2.capitalize()}."
     elif diff < 0:
-        return f"You spent ₹{abs(diff):,.2f} less in {month1.capitalize()} compared to {month2.capitalize()}."
+        return f"₹{abs(diff):,.2f} less spent in {month1.capitalize()} compared to {month2.capitalize()}."
     else:
-        return f"You spent the same in both months: ₹{total1:,.2f}."
+        return f"Spending was equal in both months: ₹{total1:,.2f}."
 
+# ----------- Streamlit UI -----------
 
-
-st.title(" Personal Finance Chatbot")
+st.title("📊 Personal Finance Chatbot")
 
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
-uploaded_file = st.file_uploader(" Upload your transaction CSV", type=["csv"])
+uploaded_file = st.file_uploader("📁 Upload your transaction CSV", type=["csv"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
@@ -76,17 +74,17 @@ if uploaded_file:
     df['Month'] = df['Date'].dt.strftime('%B')
 
     if 'Category' not in df.columns or 'Amount' not in df.columns:
-        st.warning("Please make sure your CSV includes 'Date', 'Amount', and 'Category' columns.")
+        st.warning("CSV must contain 'Date', 'Amount', and 'Category' columns.")
     else:
         total_expense = df['Amount'].sum()
         top_categories = df['Category'].value_counts().head(5)
 
-        st.subheader(" Quick Summary")
-        st.write(f"**Total Transactions:** {len(df)}")
-        st.write(f"**Total Amount Spent:** ₹{total_expense:,.2f}")
+        st.subheader("📌 Quick Financial Summary")
+        st.metric("Total Transactions", len(df))
+        st.metric("Total Spending", f"₹{total_expense:,.2f}")
 
-        st.subheader(" Top Categories")
-        st.bar_chart(top_categories)
+        st.subheader("📉 Top Expense Categories")
+        st.bar_chart(df.groupby("Category")["Amount"].sum().sort_values(ascending=False).head(5))
 
         report_buffer = io.StringIO()
         report_buffer.write("Personal Finance Report\n")
@@ -95,17 +93,17 @@ if uploaded_file:
         report_buffer.write(top_categories.to_string())
         report = report_buffer.getvalue()
 
-        st.download_button(" Download Finance Report", data=report, file_name="finance_report.txt")
+        st.download_button("⬇️ Download Finance Report", data=report, file_name="finance_report.txt")
 
 # ----------- Chat Section -----------
 
-st.subheader(" Chat with your data")
+st.subheader("💬 Chat with your Spending Data")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-prompt = st.chat_input("Ask me about your spending, savings, or categories...")
+prompt = st.chat_input("Ask me things like: 'How much did I spend on groceries in March?'")
 
 if prompt:
     with st.chat_message("user"):
@@ -121,18 +119,20 @@ if prompt:
             if len(found_months) == 2:
                 response = compare_months(df, found_months[0], found_months[1])
             else:
-                response = "Please mention two months to compare, like 'Compare March and February'."
-
+                response = "Please specify two months, like 'Compare March and April'."
         else:
             custom_response = chat_with_transactions(prompt, df)
             if custom_response:
                 response = custom_response
             else:
-                full_prompt = f"User asked: {prompt}\nRespond like a financial assistant:"
+                full_prompt = (
+                    "You are a personal finance assistant. Analyze the user's transaction data and provide financial insights "
+                    f"in Indian currency format.\n\nUser's question: {prompt}\n\nAnswer:"
+                )
                 result = text_gen(full_prompt, max_new_tokens=150, do_sample=True)
-                response = result[0]["generated_text"].split("Respond like a financial assistant:")[-1].strip()
+                response = result[0]["generated_text"].split("Answer:")[-1].strip()
     else:
-        response = "Please upload a valid CSV first with 'Amount' and 'Category' columns."
+        response = "Please upload a valid CSV with 'Amount' and 'Category' columns."
 
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.messages.append({"role": "assistant", "content": response})
